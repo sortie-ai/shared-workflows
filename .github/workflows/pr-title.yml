@@ -1,0 +1,194 @@
+# Reusable workflow: AI-powered PR title generator
+#
+# Generates a conventional-commit-style PR title using Claude API.
+# Triggered by @<bot-name> title in PR titles, comments, or reviews.
+#
+# Usage (caller):
+#   jobs:
+#     rename-pr:
+#       uses: sortie-ai/shared-workflows/.github/workflows/pr-title.yml@v1
+#       secrets: inherit
+#       with:
+#         bot-name: cicdbot
+#         skill-path: .github/skills/pr-naming/SKILL.md
+
+name: PR Title Generator
+
+on:
+  workflow_call:
+    inputs:
+      bot-name:
+        description: "Bot username that triggers title generation (e.g. cicdbot)"
+        type: string
+        required: true
+      skill-path:
+        description: "Path to the SKILL.md file with PR naming instructions (in the caller repo)"
+        type: string
+        default: ""
+      model:
+        description: "Anthropic model ID"
+        type: string
+        default: claude-haiku-4-5-20251001
+      max-tokens:
+        description: "Max tokens for the response"
+        type: number
+        default: 100
+      temperature:
+        description: "Temperature for generation"
+        type: number
+        default: 0
+      diff-max-lines:
+        description: "Maximum lines of diff to send to the model"
+        type: number
+        default: 2000
+    secrets:
+      anthropic-api-key:
+        description: Anthropic API key for Claude
+        required: true
+      bot-token:
+        description: PAT for the bot account (used to update PR title and post comments)
+        required: true
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  rename-pr:
+    name: Update PR title
+    runs-on: ubuntu-latest
+
+    # Trigger when:
+    # - A PR is opened with a title starting with "@<bot-name> title"
+    # - A comment/review contains "@<bot-name> title"
+    # Security: each trigger checks the ACTOR's association (OWNER or MEMBER)
+    if: |
+      (
+        github.event_name == 'pull_request' &&
+        startsWith(github.event.pull_request.title, format('@{0} title', inputs.bot-name)) &&
+        contains(fromJSON('["OWNER", "MEMBER"]'), github.event.pull_request.author_association)
+      ) ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        startsWith(github.event.comment.body, format('@{0} title', inputs.bot-name)) &&
+        contains(fromJSON('["OWNER", "MEMBER"]'), github.event.comment.author_association)
+      ) ||
+      (
+        github.event_name == 'pull_request_review' &&
+        startsWith(github.event.review.body, format('@{0} title', inputs.bot-name)) &&
+        contains(fromJSON('["OWNER", "MEMBER"]'), github.event.review.author_association)
+      ) ||
+      (
+        github.event_name == 'pull_request_review_comment' &&
+        contains(github.event.comment.body, format('@{0} title', inputs.bot-name)) &&
+        contains(fromJSON('["OWNER", "MEMBER"]'), github.event.comment.author_association)
+      )
+
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Prepare inputs
+        id: prepare
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SKILL_PATH: ${{ inputs.skill-path }}
+          DIFF_MAX_LINES: ${{ inputs.diff-max-lines }}
+        run: |
+          # Get PR diff (limit to configured max lines)
+          gh pr diff "$PR_NUMBER" --patch | head -n "$DIFF_MAX_LINES" > /tmp/pr_diff.txt
+
+          # Read skill instructions if path is provided and file exists
+          if [ -n "$SKILL_PATH" ] && [ -f "$SKILL_PATH" ]; then
+            sed '1{/^---$/!q;};1,/^---$/d' "$SKILL_PATH" > /tmp/skill_instructions.txt
+          else
+            echo "" > /tmp/skill_instructions.txt
+          fi
+
+          OLD_TITLE=$(gh pr view "$PR_NUMBER" --json title --jq '.title')
+          echo "old_title=$OLD_TITLE" >> "$GITHUB_OUTPUT"
+
+      - name: Generate PR title with Claude
+        id: generate
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.anthropic-api-key }}
+          ANTHROPIC_VERSION: "2023-06-01"
+          ANTHROPIC_MODEL: ${{ inputs.model }}
+          MAX_TOKENS: ${{ inputs.max-tokens }}
+          TEMPERATURE: ${{ inputs.temperature }}
+          SYSTEM_PROMPT: |
+            ## Role
+
+            You are the Senior Release Engineer of a Fortune 500 tech company.
+            You specialize in creating clear, concise, and descriptive Pull Request titles that follow best practices.
+            Your reputation depends on quality titles that accurately reflect the changes made in the PR.
+
+            ## Task
+
+            Compose a concise, self-explanatory title that reflects ONLY the main purpose of the Pull Request.
+        run: |
+          PAYLOAD=$(jq -n \
+            --arg model "$ANTHROPIC_MODEL" \
+            --arg system "$SYSTEM_PROMPT" \
+            --rawfile diff /tmp/pr_diff.txt \
+            --rawfile skill /tmp/skill_instructions.txt \
+            --argjson max_tokens "$MAX_TOKENS" \
+            --argjson temperature "$TEMPERATURE" \
+            '{
+              model: $model,
+              max_tokens: $max_tokens,
+              temperature: $temperature,
+              system: ($system + "\n\n" + $skill),
+              messages: [{
+                role: "user",
+                content: ("Based on this git diff, generate an appropriate PR title:\n\n<diff>\n" + $diff + "\n</diff>")
+              }]
+            }')
+
+          HTTP_CODE=$(curl -s -w "%{http_code}" -o /tmp/response.json \
+            https://api.anthropic.com/v1/messages \
+            -H "Content-Type: application/json" \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: $ANTHROPIC_VERSION" \
+            -d "$PAYLOAD")
+
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::error::Claude API request failed with HTTP status $HTTP_CODE"
+            cat /tmp/response.json || echo "No response body available."
+            exit 1
+          fi
+
+          NEW_TITLE=$(jq -r '.content[0].text // empty' /tmp/response.json | head -n1)
+
+          if [ -z "$NEW_TITLE" ]; then
+            ERROR_TYPE=$(jq -r '.error.type // "unknown_error"' /tmp/response.json)
+            echo "::error::Failed to generate title: $ERROR_TYPE"
+            cat /tmp/response.json || echo "No response body available."
+            exit 1
+          fi
+
+          echo "new_title=$NEW_TITLE" >> "$GITHUB_OUTPUT"
+
+      - name: Update PR title
+        env:
+          GH_TOKEN: ${{ secrets.bot-token }}
+          OLD_TITLE: ${{ steps.prepare.outputs.old_title }}
+          NEW_TITLE: ${{ steps.generate.outputs.new_title }}
+        run: |
+          gh pr edit "$PR_NUMBER" --title "$NEW_TITLE"
+
+          gh pr comment "$PR_NUMBER" --body-file - <<-EOF
+          PR title updated:
+
+          \`\`\`diff
+          - $OLD_TITLE
+          + $NEW_TITLE
+          \`\`\`
+          EOF
