@@ -7,11 +7,10 @@ Reusable GitHub Actions workflows and composite actions for [sortie-ai](https://
 ```
 .github/
 ├── actions/
-│   └── dependabot-rebase/     # Composite action: check PR merge state, request rebase
+│   └── dependabot-rebase/           # Composite action: check PR merge state, request rebase
 └── workflows/
-    ├── dependabot-merge.yml   # Auto-approve and merge Dependabot PRs after CI
-    ├── dependabot-rebase-sweep.yml  # Periodic scan: rebase stale Dependabot PRs
-    └── pr-title.yml           # AI-generated PR titles via Claude API
+    ├── dependabot-merge.yml         # Auto-approve and merge Dependabot PRs after CI
+    └── dependabot-rebase-sweep.yml  # Periodic scan: rebase stale Dependabot PRs
 ```
 
 ## Quick start
@@ -61,36 +60,6 @@ jobs:
       bot-token: ${{ secrets.CICDBOT_TOKEN }}
 ```
 
-### PR title generator
-
-```yaml
-name: PR Title Generator
-
-on:
-  pull_request:
-    types: [opened]
-  issue_comment:
-    types: [created]
-  pull_request_review_comment:
-    types: [created]
-  pull_request_review:
-    types: [submitted]
-
-permissions:
-  pull-requests: write
-  contents: read
-
-jobs:
-  rename-pr:
-    uses: sortie-ai/shared-workflows/.github/workflows/pr-title.yml@v1
-    with:
-      bot-name: cicdbot
-      skill-path: .github/skills/pr-naming/SKILL.md
-    secrets:
-      anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-      bot-token: ${{ secrets.CICDBOT_TOKEN }}
-```
-
 ## Composite actions
 
 ### `dependabot-rebase`
@@ -126,7 +95,6 @@ During development you may use `@main`, but never in production workflows.
 | Secret | Purpose | Used by |
 |--------|---------|---------|
 | `CICDBOT_TOKEN` | Bot PAT with push access | All workflows |
-| `ANTHROPIC_API_KEY` | Claude API key | PR title generator |
 
 ## License
 
