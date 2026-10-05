@@ -1,0 +1,31 @@
+name: 'Setup lychee'
+description: 'Installs a checksum-verified lychee release binary and adds it to PATH (x86_64 Linux runners only)'
+
+inputs:
+  version:
+    description: 'lychee release version, without the lychee-v prefix'
+    required: false
+    default: '0.24.2'
+  sha256:
+    description: 'SHA-256 of the x86_64 Linux release archive for that version'
+    required: false
+    default: '1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install lychee
+      shell: bash
+      working-directory: ${{ runner.temp }}
+      # The PATH entry is a directory this step creates and fills with the
+      # verified binary only; no step input or event field reaches it.
+      run: | # zizmor: ignore[github-env]
+        lychee=lychee-x86_64-unknown-linux-gnu.tar.gz
+        curl -fsSLO "https://github.com/lycheeverse/lychee/releases/download/lychee-v${VERSION}/${lychee}"
+        printf '%s  %s\n' "$SHA256" "$lychee" | sha256sum -c -
+        mkdir -p lychee-bin
+        tar -xzf "$lychee" -C lychee-bin --strip-components=1 lychee-x86_64-unknown-linux-gnu/lychee
+        echo "$PWD/lychee-bin" >> "$GITHUB_PATH"
+      env:
+        VERSION: ${{ inputs.version }}
+        SHA256: ${{ inputs.sha256 }}

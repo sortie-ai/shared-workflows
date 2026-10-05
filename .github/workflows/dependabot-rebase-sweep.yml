@@ -27,15 +27,16 @@ on:
         description: PAT for a bot account with push access (for posting rebase comments)
         required: true
 
-permissions:
-  contents: write
-  pull-requests: write
-  actions: read
+permissions: {}
 
 jobs:
   sweep:
     name: Check Dependabot PRs for rebase
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
 
     steps:
       - name: Find Dependabot PRs needing rebase
