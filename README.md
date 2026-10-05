@@ -88,6 +88,14 @@ Pin to a **tag** in production:
 uses: sortie-ai/shared-workflows/.github/workflows/dependabot-merge.yml@v1
 ```
 
+A tag can be moved. To make the reference immutable, pin the tag's full commit SHA and keep the version in a comment:
+
+```yaml
+uses: sortie-ai/shared-workflows/.github/workflows/dependabot-merge.yml@<40-character-sha> # vX.Y.Z
+```
+
+Every action these workflows call, including this repository's own composite action, is pinned to a full commit SHA, so a caller pinned by SHA runs fixed code end to end.
+
 During development you may use `@main`, but never in production workflows.
 
 ## Required secrets

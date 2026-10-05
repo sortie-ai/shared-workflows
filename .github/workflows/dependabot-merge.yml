@@ -29,14 +29,15 @@ on:
           (GITHUB_TOKEN cannot approve its own PRs in most configurations).
         required: true
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 
 jobs:
   dependabot:
     name: Auto-approve and merge
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # gh pr merge --auto with GITHUB_TOKEN
+      pull-requests: write # gh pr merge --auto with GITHUB_TOKEN
 
     # Only run if:
     # 1. The CI workflow was triggered by a PR (not a direct push)
@@ -48,7 +49,7 @@ jobs:
     steps:
       - name: Get Pull Request info
         id: pr
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           script: |
             const { data: pullRequests } = await github.rest.pulls.list({
@@ -71,14 +72,16 @@ jobs:
 
       - name: Check CI conclusion
         if: github.event.workflow_run.conclusion != 'success'
+        env:
+          CI_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         run: |
-          echo "::error::CI workflow did not succeed (conclusion: ${{ github.event.workflow_run.conclusion }})"
+          echo "::error::CI workflow did not succeed (conclusion: $CI_CONCLUSION)"
           echo "Skipping approval and auto-merge."
           exit 1
 
       - name: Check PR merge state
         id: pr-check
-        uses: sortie-ai/shared-workflows/.github/actions/dependabot-rebase@v1
+        uses: sortie-ai/shared-workflows/.github/actions/dependabot-rebase@d7d3eee35a3a49856abbb780d503eee59b5d5c6a # v1.0.0
         with:
           pr-number: ${{ steps.pr.outputs.number }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -86,8 +89,10 @@ jobs:
 
       - name: Skip - merge state not ready
         if: steps.pr-check.outputs.action == 'skip'
+        env:
+          REASON: ${{ steps.pr-check.outputs.reason }}
         run: |
-          echo "::warning::Cannot proceed - merge state is ${{ steps.pr-check.outputs.reason }}. Waiting for state to resolve."
+          echo "::warning::Cannot proceed - merge state is $REASON. Waiting for state to resolve."
 
       - name: Approve Pull Request
         if: steps.pr-check.outputs.action == 'approve'
