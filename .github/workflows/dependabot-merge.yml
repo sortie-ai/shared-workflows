@@ -22,6 +22,13 @@ on:
         description: "Merge method: squash, merge, or rebase"
         type: string
         default: squash
+      trusted-pushers:
+        description: >
+          Comma-separated logins, besides Dependabot, whose pushes to a
+          Dependabot PR are approved once CI passes, such as a bot that
+          commits generated files the update changes.
+        type: string
+        default: ""
     secrets:
       bot-token:
         description: >
@@ -41,10 +48,11 @@ jobs:
 
     # Only run if:
     # 1. The CI workflow was triggered by a PR (not a direct push)
-    # 2. The triggering user is Dependabot
+    # 2. The push that triggered it came from Dependabot or a trusted pusher
     if: >
       github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.actor.login == 'dependabot[bot]'
+      (github.event.workflow_run.actor.login == 'dependabot[bot]' ||
+       contains(format(',{0},', inputs.trusted-pushers), format(',{0},', github.event.workflow_run.actor.login)))
 
     steps:
       - name: Get Pull Request info
@@ -65,13 +73,20 @@ jobs:
             }
 
             const pr = pullRequests[0];
+            // A trusted pusher also pushes to PRs of its own, which are not ours to merge.
+            const fromDependabot = pr.user.login === 'dependabot[bot]';
+            core.setOutput('dependabot', String(fromDependabot));
+            if (!fromDependabot) {
+              console.log(`PR #${pr.number} was opened by ${pr.user.login}, not Dependabot; skipping`);
+              return;
+            }
             core.setOutput('number', pr.number);
             core.setOutput('url', pr.html_url);
 
             console.log(`Found PR #${pr.number}`);
 
       - name: Check CI conclusion
-        if: github.event.workflow_run.conclusion != 'success'
+        if: steps.pr.outputs.dependabot == 'true' && github.event.workflow_run.conclusion != 'success'
         env:
           CI_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         run: |
@@ -80,6 +95,7 @@ jobs:
           exit 1
 
       - name: Check PR merge state
+        if: steps.pr.outputs.dependabot == 'true'
         id: pr-check
         uses: sortie-ai/shared-workflows/.github/actions/dependabot-rebase@d7d3eee35a3a49856abbb780d503eee59b5d5c6a # v1.0.0
         with:
