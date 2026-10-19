@@ -48,23 +48,33 @@ jobs:
 
     # Only run if:
     # 1. The CI workflow was triggered by a PR (not a direct push)
-    # 2. The push that triggered it came from Dependabot or a trusted pusher
+    # 2. The push that triggered it may have come from Dependabot or a
+    #    trusted pusher; the PR lookup step checks the exact login
     if: >
       github.event.workflow_run.event == 'pull_request' &&
-      (github.event.workflow_run.actor.login == 'dependabot[bot]' ||
-       contains(format(',{0},', inputs.trusted-pushers), format(',{0},', github.event.workflow_run.actor.login)))
+      (github.event.workflow_run.actor.login == 'dependabot[bot]' || inputs.trusted-pushers != '')
 
     steps:
       - name: Get Pull Request info
         id: pr
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        env:
+          TRUSTED_PUSHERS: ${{ inputs.trusted-pushers }}
         with:
           script: |
+            const run = context.payload.workflow_run;
+            const trusted = ['dependabot[bot]', ...process.env.TRUSTED_PUSHERS.split(',').map((login) => login.trim()).filter(Boolean)];
+            if (!trusted.includes(run.actor.login)) {
+              console.log(`CI run started by ${run.actor.login}, who is not a trusted pusher; skipping`);
+              core.setOutput('eligible', 'false');
+              return;
+            }
+
             const { data: pullRequests } = await github.rest.pulls.list({
               owner: context.repo.owner,
               repo: context.repo.repo,
               state: 'open',
-              head: `${context.repo.owner}:${context.payload.workflow_run.head_branch}`
+              head: `${context.repo.owner}:${run.head_branch}`
             });
 
             if (pullRequests.length === 0) {
@@ -75,7 +85,7 @@ jobs:
             const pr = pullRequests[0];
             // A trusted pusher also pushes to PRs of its own, which are not ours to merge.
             const fromDependabot = pr.user.login === 'dependabot[bot]';
-            core.setOutput('dependabot', String(fromDependabot));
+            core.setOutput('eligible', String(fromDependabot));
             if (!fromDependabot) {
               console.log(`PR #${pr.number} was opened by ${pr.user.login}, not Dependabot; skipping`);
               return;
@@ -86,7 +96,7 @@ jobs:
             console.log(`Found PR #${pr.number}`);
 
       - name: Check CI conclusion
-        if: steps.pr.outputs.dependabot == 'true' && github.event.workflow_run.conclusion != 'success'
+        if: steps.pr.outputs.eligible == 'true' && github.event.workflow_run.conclusion != 'success'
         env:
           CI_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         run: |
@@ -95,7 +105,7 @@ jobs:
           exit 1
 
       - name: Check PR merge state
-        if: steps.pr.outputs.dependabot == 'true'
+        if: steps.pr.outputs.eligible == 'true'
         id: pr-check
         uses: sortie-ai/shared-workflows/.github/actions/dependabot-rebase@d7d3eee35a3a49856abbb780d503eee59b5d5c6a # v1.0.0
         with:
