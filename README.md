@@ -46,7 +46,7 @@ By default only CI runs that Dependabot's own pushes started are approved. When 
       trusted-pushers: cicdbot
 ```
 
-A commit pushed to a Dependabot PR stops Dependabot from rebasing it unless the commit message carries `[dependabot skip]`.
+A commit pushed to a Dependabot PR stops Dependabot from rebasing it unless the commit message carries `[dependabot skip]`. The approval comes from the `bot-token` account, so if the branch requires the last push to be approved by someone else, that account cannot be the trusted pusher.
 
 ### Dependabot rebase sweep
 
