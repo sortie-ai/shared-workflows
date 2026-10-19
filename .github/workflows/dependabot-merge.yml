@@ -90,6 +90,13 @@ jobs:
               console.log(`PR #${pr.number} was opened by ${pr.user.login}, not Dependabot; skipping`);
               return;
             }
+            // A run that finished after a newer push tested a revision the PR no
+            // longer has; the newer push's own run decides.
+            if (pr.head.sha !== run.head_sha) {
+              console.log(`PR #${pr.number} moved to ${pr.head.sha} after this run tested ${run.head_sha}; skipping`);
+              core.setOutput('eligible', 'false');
+              return;
+            }
             core.setOutput('number', pr.number);
             core.setOutput('url', pr.html_url);
 
